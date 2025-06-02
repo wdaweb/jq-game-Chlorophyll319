@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>翻牌遊戲</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
+      }
+      #board {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        width: 660px;
+        margin: 20px auto;
+      }
+      #choices {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+      }
+      .card {
+        width: 100px;
+        height: 140px;
+        margin: 5px;
+        position: relative;
+        perspective: 800px;
+        cursor: pointer;
+      }
+      .card_inner {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        transition: transform 0.6s;
+        transform-style: preserve-3d;
+      }
+      .show_back .card_inner {
+        transform: rotateY(180deg);
+      }
+      .card_front,
+      .card_back {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        backface-visibility: hidden;
+        background-size: cover;
+        background-position: center;
+        border-radius: 8px;
+      }
+      .card_front {
+        transform: rotateY(180deg);
+      }
+      .highlight {
+        outline: gold solid 4px;
+        box-sizing: border-box;
+      }
+      #status {
+        margin-top: 20px;
+        font-weight: bold;
+      }
+      .size {
+        width: 80px;
+        height: 91.06px;
+        object-fit: cover;
+        border-radius: 8px;
+      }
+      .player {
+        outline: darkblue solid 4px;
+      }
+      .playboter {
+        outline: tan solid 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>翻牌記憶遊戲</h1>
+    <p id="title">請選擇一張牌</p>
+    <p>玩家與機器人輪流翻牌，先翻對自己指定的 3 張牌者勝！</p>
+    <div id="choices"></div>
+    <div id="board"></div>
+    <div id="status"></div>
+    <button id="restart" style="display: none">再玩一次！</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script>
+      // 資料設定區（初始化）
+      //  1. 六種牌，每種出現三張
+      //  2. 儲存產生的卡片（dom）
+      //  3. 存玩家選擇的牌面編號
+      //  4. 存機器人選擇的牌面編號
+      //  5. 玩家翻正確張數
+      //  6. 計時開始時間
+      //  7. 是否遊戲結束
+      //  8. 機器人下次要翻的指定目標
+      const card_types = [0, 1, 2, 3, 4, 5];
+      const cards = [];
+      let player_target = null;
+      let bot_target = null;
+      let player_hit = 0;
+      let start_time = null;
+      let game_end = false;
+      let bot_next_target = null;
+
+      // ------工具：洗牌（打亂陣列）------
+      /*
+      生一個隨機整數 x （0~i）
+      把第i和第x個的 值 交換
+      */
+      //                      ↓傳陣列進去
+      function wash_game_card(array) {
+        // 跑每張牌
+        for (let i = array.length - 1; i > 0; i--) {
+          const x = Math.floor(Math.random() * (i + 1));
+          [array[i], array[x]] = [array[x], array[i]];
+        }
+        return array;
+      }
+
+      // --------遊戲區--------
+      // 遊戲前準備
+
+      // 建立選牌畫面（遊戲開場動畫）
+      // 玩家從 6 張牌中選 1 張作為目標牌
+      function render_choice_ui() {
+        const after_wash_card = wash_game_card([...card_types]);
+        after_wash_card.forEach((type) => {
+          const img = $(`
+            <img class="size choise_one" src="./cards/back.png" data-type="${type}" />
+          `);
+
+          $("#choices").append(img);
+
+          // 玩家點擊事件
+          // 選擇目標牌
+          img.on("click", function () {
+            if (player_target !== null) return;
+            player_target = Number($(this).data("type"));
+            const other_card = card_types.filter((t) => t !== player_target);
+            bot_target =
+              other_card[Math.floor(Math.random() * other_card.length)];
+
+            // 顯示牌面
+            $(".choise_one").each(function () {
+              $(this).attr("src", `./cards/${$(this).data("type")}.png`);
+              if (Number($(this).data("type")) === player_target) {
+                $(this).addClass("highlight");
+              } else {
+                $(this).removeClass("highlight");
+              }
+            });
+
+            // 提醒選擇結果
+            $("#status").text(
+              `你選的是 ${player_target} 號，機器人選的是 ${bot_target} 號。記住位置！`
+            );
+            // 等 2 秒讓玩家記住牌面，再開始正式遊戲
+            setTimeout(start_game, 2000);
+          });
+        });
+      }
+
+      // 遊戲開始（比賽前準備）
+      function start_game() {
+        // 隱藏選擇區域
+        $("#choices").hide();
+        // 改 #title 文字
+        $("#title").text(`根據記憶翻牌`);
+
+        // 1. 每種牌面出現3張（共18張）
+        // 2. 打亂順序
+        const need_wash_card = card_types.flatMap((type) => [type, type, type]);
+        const after_wash_play_card = wash_game_card(need_wash_card);
+
+        // 生成所有卡牌
+        after_wash_play_card.forEach((type) => {
+          const card = $(
+            `<div class="card" data-type="${type}">
+              <div class="card_inner">
+                <div class="card_front" style="background-image: url('./cards/${type}.png')"></div>
+                <div class="card_back" style="background-image: url('./cards/back.png')"></div>
+              </div>
+            </div>`
+          );
+          $("#board").append(card);
+          cards.push(card);
+        });
+
+        // 玩家與機器人輪流翻牌，目標是先翻對自己指定的 3 張牌
+        // 遊戲開始時展示 3 秒再蓋起來
+        $(".card").addClass("show_back");
+        setTimeout(() => {
+          $(".card").removeClass("show_back");
+          play_game();
+        }, 3000);
+      }
+
+      // 比賽開始
+      // 玩家與機器人翻牌流程
+      function play_game() {
+        // 1. 開始計時
+        start_time = Date.now();
+
+        // 2. 機器人初始化記憶
+        //  a. 記得所有牌的位置
+        //  b. 有40%的機率會搞錯0跟1
+        //  c. 有50%的機率會搞錯1跟2
+        //  d. 有20%的機率會搞錯3跟4
+        //  e. 有10%的機率會搞錯2跟5
+        //  f. 翻錯後會記得正確的
+        bot_memory = cards
+          .map((card) => {
+            const true_type = Number(card.data("type"));
+            let mistaken_type = true_type;
+            const rand = Math.random();
+            if (true_type === 0 && rand < 0.4) mistaken_type = 1;
+            else if (true_type === 1 && rand < 0.4) mistaken_type = 0;
+            else if (true_type === 1 && rand < 0.5) mistaken_type = 2;
+            else if (true_type === 2 && rand < 0.5) mistaken_type = 1;
+            else if (true_type === 3 && rand < 0.2) mistaken_type = 4;
+            else if (true_type === 4 && rand < 0.2) mistaken_type = 3;
+            else if (true_type === 2 && rand < 0.1) mistaken_type = 5;
+            else if (true_type === 5 && rand < 0.1) mistaken_type = 2;
+
+            return {
+              true_type,
+              memory_type: mistaken_type,
+              element: card,
+              has_tried: false,
+            };
+          })
+          .sort(() => 0.5 - Math.random());
+
+        // 3. 玩家點擊事件
+        $(".card").on("click", function () {
+          if (game_end || $(this).hasClass("show_back")) return;
+          const type = Number($(this).data("type"));
+          $(this).addClass("show_back");
+
+          // 翻 → 對 → 正確紀錄+1
+          if (type === player_target && !$(this).data("hit")) {
+            player_hit++;
+            $(this).data("hit", true);
+
+            // 翻對三張就贏了
+            if (player_hit === 3) {
+              end_game("player");
+            }
+          } else {
+            // 翻 → 錯 → 蓋回去
+            setTimeout(() => $(this).removeClass("show_back"), 800);
+          }
+          // 玩家翻牌後 → 如果是機器人要找的牌，記下來下次優先翻
+          bot_memory.forEach((m) => {
+            if (m.element.is(this)) {
+              m.memory_type = m.true_type;
+              m.has_tried = true;
+
+              if (m.true_type === bot_target) {
+                bot_next_target = m;
+              }
+            }
+          });
+        });
+
+        // 機器人
+
+        // 初始化
+        // 機器人分數
+        // 機器人要翻的牌
+        let bot_hits = 0;
+        let bot_idx = 0;
+
+        // 機器人的動作
+        // 機器人每 1.2 秒自動翻一張牌（根據記憶推理）
+        function bot_action() {
+          // 遊戲結束後停止翻牌 & 計時區
+          if (game_end) return clearInterval(bot_play_game);
+
+          // 抓現在要翻的那張牌
+          let card;
+          // 如果上一輪有記下指定的牌就優先翻
+          if (bot_next_target) {
+            card = bot_next_target;
+            // 清除目標
+            bot_next_target = null;
+          } else {
+            // 如果沒有上一輪的目標，從記憶中找一張：
+            // 1. 還沒被翻開（避免重複翻）
+            // 2. 記憶中它是目標牌（記憶type === bot要找的目標type）
+            while (bot_idx < bot_memory.length) {
+              // 檢查記憶牌庫
+              const candidate = bot_memory[bot_idx++];
+              if (
+                // 還沒翻過 && 記憶中的目標牌
+                !candidate.element.hasClass("show_back") &&
+                candidate.memory_type === bot_target &&
+                !candidate.has_tried
+              ) {
+                // 翻這張
+                card = candidate;
+                // 找到就跳出
+                break;
+              }
+            }
+            // 如果記憶中都找不到，亂猜一張還沒翻的
+            if (!card) {
+              const unknown_cards = bot_memory.filter(
+                (m) => !m.element.hasClass("show_back") && !m.has_tried
+              );
+
+              card = unknown_cards.length
+                ? unknown_cards[
+                    Math.floor(Math.random() * unknown_cards.length)
+                  ]
+                : null;
+            }
+          }
+          // 如果這一輪找不到可翻的牌，就跳過這次（例如所有牌都被翻開或已嘗試過）
+          if (!card) return;
+
+          // 翻開這張牌
+          card.element.addClass("show_back");
+          // 如果翻對了
+          if (card.true_type === bot_target && !card.element.data("hit")) {
+            // 修正記憶
+            // 分數+1
+            // 翻到三張機器人獲勝（結束遊戲）
+            card.memory_type = card.true_type;
+            card.has_tried = true;
+            card.element.data("hit", true);
+            bot_hits++;
+            if (bot_hits === 3) {
+              end_game("bot");
+              clearInterval(bot_play_game);
+            }
+          } else {
+            // 翻錯
+            // 修正記憶
+            // 把牌蓋回去
+            card.memory_type = card.true_type;
+            card.has_tried = true;
+
+            setTimeout(() => card.element.removeClass("show_back"), 800);
+          }
+        }
+
+        // 機器人翻牌速度
+        const bot_play_game = setInterval(bot_action, 1200);
+      }
+
+      // 再玩一次
+      $("#restart").on("click", function () {
+        // 重置區塊
+        $("#choices").empty().show();
+        $("#board").empty();
+        $("#status").text("");
+        $("#title").text("請選擇一張牌");
+        $(this).hide();
+
+        // 重置變數
+        player_target = null;
+        bot_target = null;
+        player_hit = 0;
+        game_end = false;
+        cards.length = 0;
+
+        // 重新建選牌畫面
+        render_choice_ui();
+      });
+
+      // 結果
+      function end_game(winner) {
+        game_end = true;
+        const time_used = ((Date.now() - start_time) / 1000).toFixed(2);
+        if (winner === "player") {
+          $("#status").text(`勝利者：你！用時 ${time_used} 秒！`);
+        } else {
+          $("#status").text(`你輸了~`);
+        }
+        $("#restart").show();
+      }
+
+      // 遊戲執行
+      render_choice_ui();
+    </script>
+  </body>
+</html>
